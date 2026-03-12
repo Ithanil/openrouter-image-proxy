@@ -193,5 +193,221 @@ class ProxyAudioTests(unittest.TestCase):
         self.assertEqual(captured["body"]["messages"][1]["content"], "Hello there")
 
 
+class ProxyImageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(openrouter_media_proxy.app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+
+    def test_generations_translate_request_and_collect_parallel_results(self) -> None:
+        calls: list[dict] = []
+
+        async def fake_call_upstream(client, body, headers, rid, idx):
+            calls.append(
+                {
+                    "body": body,
+                    "headers": headers,
+                    "idx": idx,
+                }
+            )
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Revised sunset prompt",
+                                "images": [
+                                    {
+                                        "image_url": {
+                                            "url": "data:image/png;base64,QUJDRA=="
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+                None,
+            )
+
+        with patch.object(openrouter_media_proxy, "_call_upstream", new=fake_call_upstream):
+            response = self.client.post(
+                "/v1/images/generations",
+                headers={"Authorization": "Bearer test-key"},
+                json={
+                    "background": "transparent",
+                    "model": "google/gemini-2.5-flash-image-preview",
+                    "n": 2,
+                    "prompt": "A mountain cabin at sunset",
+                    "quality": "high",
+                    "size": "1792x1024",
+                    "style": "vivid",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("created", payload)
+        self.assertEqual(
+            payload["data"],
+            [
+                {"b64_json": "QUJDRA==", "revised_prompt": "Revised sunset prompt"},
+                {"b64_json": "QUJDRA==", "revised_prompt": "Revised sunset prompt"},
+            ],
+        )
+
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertEqual(call["headers"]["Authorization"], "Bearer test-key")
+            self.assertEqual(
+                call["body"]["model"],
+                "google/gemini-2.5-flash-image-preview",
+            )
+            self.assertEqual(call["body"]["modalities"], openrouter_media_proxy._image_modalities())
+            self.assertEqual(
+                call["body"]["image_config"],
+                {"aspect_ratio": "16:9", "image_size": "4K"},
+            )
+            self.assertIn("A mountain cabin at sunset", call["body"]["messages"][0]["content"])
+            self.assertIn("vivid, dramatic style", call["body"]["messages"][0]["content"])
+            self.assertIn(
+                "transparent background",
+                call["body"]["messages"][0]["content"],
+            )
+        self.assertEqual(sorted(call["idx"] for call in calls), [0, 1])
+
+    def test_edits_json_translates_images_and_mask(self) -> None:
+        captured: dict = {}
+
+        async def fake_call_upstream(client, body, headers, rid, idx):
+            captured["body"] = body
+            captured["headers"] = headers
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Edited image",
+                                "images": [
+                                    {
+                                        "image_url": {
+                                            "url": "data:image/png;base64,RURJVA=="
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+                None,
+            )
+
+        with patch.object(openrouter_media_proxy, "_call_upstream", new=fake_call_upstream):
+            response = self.client.post(
+                "/v1/images/edits",
+                headers={"Authorization": "Bearer test-key"},
+                json={
+                    "background": "transparent",
+                    "images": [
+                        {"image_url": "data:image/png;base64,SU1BR0Ux"},
+                    ],
+                    "mask": {"image_url": "data:image/png;base64,TUFTSw=="},
+                    "model": "google/gemini-2.5-flash-image-preview",
+                    "prompt": "Add a rainbow",
+                    "quality": "hd",
+                    "size": "1024x1024",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("created", payload)
+        self.assertEqual(
+            payload["data"],
+            [{"b64_json": "RURJVA==", "revised_prompt": "Edited image"}],
+        )
+
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(
+            captured["body"]["image_config"],
+            {"aspect_ratio": "1:1", "image_size": "2K"},
+        )
+        content_parts = captured["body"]["messages"][0]["content"]
+        self.assertEqual(content_parts[0]["type"], "text")
+        self.assertIn("Add a rainbow", content_parts[0]["text"])
+        self.assertIn("transparent background", content_parts[0]["text"])
+        self.assertEqual(
+            content_parts[1:],
+            [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,SU1BR0Ux"}},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,TUFTSw=="}},
+            ],
+        )
+
+    def test_edits_multipart_translates_uploaded_files_into_data_urls(self) -> None:
+        captured: dict = {}
+
+        async def fake_call_upstream(client, body, headers, rid, idx):
+            captured["body"] = body
+            return (
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "images": [
+                                    {
+                                        "image_url": {
+                                            "url": "data:image/png;base64,TU9ESUZJRUQ="
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                },
+                None,
+            )
+
+        with patch.object(openrouter_media_proxy, "_call_upstream", new=fake_call_upstream):
+            response = self.client.post(
+                "/v1/images/edits",
+                data={
+                    "model": "google/gemini-2.5-flash-image-preview",
+                    "prompt": "Replace the sky with stars",
+                },
+                files=[
+                    ("image", ("source.png", b"\x89PNG", "image/png")),
+                    ("mask", ("mask.png", b"MASK", "image/png")),
+                ],
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["data"],
+            [{"b64_json": "TU9ESUZJRUQ="}],
+        )
+
+        content_parts = captured["body"]["messages"][0]["content"]
+        self.assertEqual(content_parts[0]["text"], "Replace the sky with stars")
+        self.assertEqual(
+            content_parts[1:],
+            [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw==",
+                    },
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,TUFTSw==",
+                    },
+                },
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
