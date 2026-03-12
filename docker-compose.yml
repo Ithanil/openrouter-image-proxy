@@ -7,8 +7,8 @@ services:
     working_dir: /app
     environment:
       - OPENROUTER_URL=https://openrouter.ai/api/v1
-      # "image,text" for Gemini-style models; "image" for Flux / Sourceful.
-      - DEFAULT_IMAGE_MODALITIES=image,text
+      # You can use "image,text" for Gemini-style models; default works for all image models.
+      - DEFAULT_IMAGE_MODALITIES=image
       - UPSTREAM_TIMEOUT=120
       - LOG_LEVEL=INFO
     command: >

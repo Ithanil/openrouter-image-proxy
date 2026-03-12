@@ -94,8 +94,7 @@ Bare `/images/*` and `/audio/*` routes are also available for convenience.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL. |
-| `DEFAULT_MODALITIES` | `image,text` | Legacy image-only env var kept for compatibility. |
-| `DEFAULT_IMAGE_MODALITIES` | `image,text` | Preferred env var for image-capable models. |
+| `DEFAULT_IMAGE_MODALITIES` | `image` | Modalities for image-capable models. Set `image,text` for models that require both. |
 | `UPSTREAM_TIMEOUT` | `120` | Request timeout in seconds. |
 | `LOG_LEVEL` | `INFO` | Python logging level. |
 
